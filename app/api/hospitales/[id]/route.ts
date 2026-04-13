@@ -18,11 +18,12 @@ const updateSchema = z.object({
 // PUT /api/hospitales/[id]
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await getServerSession(authOptions)
   if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
 
+  const { id } = await params
   const body = await request.json().catch(() => null)
   const parsed = updateSchema.safeParse(body)
 
@@ -36,9 +37,7 @@ export async function PUT(
   const [updated] = await db
     .update(hospitals)
     .set({ ...parsed.data, updatedAt: new Date() })
-    .where(
-      and(eq(hospitals.id, params.id), eq(hospitals.userId, session.user!.id!)),
-    )
+    .where(and(eq(hospitals.id, id), eq(hospitals.userId, session.user!.id!)))
     .returning()
 
   if (!updated) {
@@ -51,16 +50,15 @@ export async function PUT(
 // DELETE /api/hospitales/[id]
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await getServerSession(authOptions)
   if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
 
+  const { id } = await params
   const [deleted] = await db
     .delete(hospitals)
-    .where(
-      and(eq(hospitals.id, params.id), eq(hospitals.userId, session.user!.id!)),
-    )
+    .where(and(eq(hospitals.id, id), eq(hospitals.userId, session.user!.id!)))
     .returning()
 
   if (!deleted) {
