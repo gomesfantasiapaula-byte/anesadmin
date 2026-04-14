@@ -1,20 +1,18 @@
 import NextAuth, { type NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 import { DrizzleAdapter } from '@auth/drizzle-adapter'
-import { pgTableCreator } from 'drizzle-orm/pg-core'
 import { db } from '@/lib/db'
-
-// Map NextAuth default table names → our actual table names
-const tableNameMap: Record<string, string> = {
-  user: 'users',
-  account: 'accounts',
-  session: 'sessions',
-  verificationToken: 'verification_tokens',
-}
+import { users, accounts, sessions, verificationTokens } from '@/lib/db/schema'
 
 export const authOptions: NextAuthOptions = {
-  // Adaptador Drizzle para persistir sesiones en Postgres
-  adapter: DrizzleAdapter(db, pgTableCreator((name) => tableNameMap[name] ?? name)),
+  // Adaptador Drizzle — cast needed due to drizzle-orm@0.30 / adapter type mismatch
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adapter: DrizzleAdapter(db, {
+    usersTable: users as any,
+    accountsTable: accounts as any,
+    sessionsTable: sessions as any,
+    verificationTokensTable: verificationTokens as any,
+  }),
 
   providers: [
     GoogleProvider({
