@@ -30,7 +30,7 @@ export const authOptions: NextAuthOptions = {
   ],
 
   session: {
-    strategy: 'database', // Sesiones en Postgres (más seguro que JWT para datos sensibles)
+    strategy: 'jwt', // JWT requerido para next-auth/middleware en Edge Runtime
     maxAge: 30 * 24 * 60 * 60, // 30 días
   },
 
@@ -40,10 +40,16 @@ export const authOptions: NextAuthOptions = {
   },
 
   callbacks: {
-    // Exponer el id del usuario en la sesión del cliente
-    async session({ session, user }) {
-      if (session.user) {
-        session.user.id = user.id
+    // Con JWT, el id viene del token (no de `user`)
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id
+      }
+      return token
+    },
+    async session({ session, token }) {
+      if (session.user && token.id) {
+        session.user.id = token.id as string
       }
       return session
     },
