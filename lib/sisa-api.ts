@@ -1,8 +1,10 @@
 /**
- * Cliente para la API pública de SISA (Sistema Integrado de Información Sanitaria Argentina)
+ * Cliente para la API de SISA (Sistema Integrado de Información Sanitaria Argentina)
  * del Ministerio de Salud de la Nación.
  *
  * Endpoint: https://sisa.msal.gov.ar/sisa/services/rest/cobertura/obtener
+ * Requiere usuario/clave otorgados por MSAL. Si no están configurados,
+ * devuelve un resultado "sin datos" en lugar de lanzar error.
  */
 
 // Tipos de respuesta de la API SISA
@@ -19,6 +21,8 @@ export interface SisaCobertura {
   estado?: string
   errorCodigo?: string
   errorDescripcion?: string
+  // Campo propio cuando SISA no está configurada
+  sinDatos?: boolean
 }
 
 export type SisaSexo = 'M' | 'F'
@@ -34,9 +38,20 @@ export async function consultarCoberturaSisa(
   dni: string,
   sexo: SisaSexo,
 ): Promise<SisaCobertura> {
+  const usuario = process.env.SISA_USUARIO
+  const clave = process.env.SISA_CLAVE
+
+  // Si no hay credenciales configuradas, devolver respuesta vacía sin tirar error
+  if (!usuario || !clave) {
+    console.warn('[SISA] SISA_USUARIO/SISA_CLAVE no configurados. Devolviendo sin datos.')
+    return { dni, sexo, sinDatos: true, errorDescripcion: 'Credenciales SISA no configuradas' }
+  }
+
   const url = new URL(
     'https://sisa.msal.gov.ar/sisa/services/rest/cobertura/obtener',
   )
+  url.searchParams.set('usuario', usuario)
+  url.searchParams.set('clave', clave)
   url.searchParams.set('dni', dni.replace(/\./g, ''))
   url.searchParams.set('sexo', sexo)
 
@@ -46,19 +61,28 @@ export async function consultarCoberturaSisa(
       Accept: 'application/json',
       'User-Agent': 'AnesAdmin/1.0',
     },
-    // Timeout de 10 segundos
-    signal: AbortSignal.timeout(10_000),
-    // No cachear en el fetch de Next.js — el cache lo manejamos en KV
+    // Timeout de 15 segundos (SISA puede ser lento)
+    signal: AbortSignal.timeout(15_000),
+    // No cachear en el fetch de Next.js — el cache lo manejamos en KV/Postgres
     cache: 'no-store',
   })
 
+  // SISA a veces devuelve 200 con HTML de error, capturamos el texto primero
+  const text = await response.text()
+
   if (!response.ok) {
     throw new Error(
-      `Error SISA API: ${response.status} ${response.statusText}`,
+      `Error SISA API HTTP ${response.status}: ${text.slice(0, 200)}`,
     )
   }
 
-  const data: SisaCobertura = await response.json()
+  let data: SisaCobertura
+  try {
+    data = JSON.parse(text)
+  } catch {
+    throw new Error(`SISA no devolvió JSON válido. Respuesta: ${text.slice(0, 300)}`)
+  }
+
   return data
 }
 

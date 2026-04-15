@@ -9,6 +9,7 @@ import {
   time,
   varchar,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
@@ -118,7 +119,7 @@ export const patientsCache = pgTable(
     fetchedAt: timestamp('fetched_at', { mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
-    dniSexoIdx: index('patients_cache_dni_sexo_idx').on(table.dni, table.sexo),
+    dniSexoIdx: uniqueIndex('patients_cache_dni_sexo_idx').on(table.dni, table.sexo),
   }),
 )
 
