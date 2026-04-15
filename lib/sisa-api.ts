@@ -38,6 +38,8 @@ export interface SisaCobertura {
   errorDescripcion?: string
   // Flag propio: sin credenciales configuradas
   sinCredenciales?: boolean
+  /** Edad calculada a partir de fechaNacimiento */
+  _edad?: number
 }
 
 export type SisaSexo = 'M' | 'F'

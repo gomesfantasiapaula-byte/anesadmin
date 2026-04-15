@@ -414,7 +414,8 @@ function TarjetaResultado({
               </h3>
               <p className="text-text-secondary text-sm">
                 DNI {datos?.dni || dniActual}
-                {datos?.fechaNacimiento && ` · ${datos.fechaNacimiento}`}
+                {datos?._edad != null && ` · ${datos._edad} años`}
+                {datos?.fechaNacimiento && !datos._edad && ` · FN: ${datos.fechaNacimiento}`}
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -434,6 +435,18 @@ function TarjetaResultado({
 
       {/* Datos */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-border">
+        <DataField label="Apellido" value={datos?.apellido} />
+        <DataField label="Nombre" value={datos?.nombre} />
+        <DataField
+          label="Edad"
+          value={
+            datos?._edad != null
+              ? `${datos._edad} años`
+              : datos?.fechaNacimiento
+              ? `FN: ${datos.fechaNacimiento}`
+              : undefined
+          }
+        />
         <DataField label="Obra social / Agente del seguro" value={datos?.obraSocial} />
         <DataField label="Código RNOS" value={datos?.rnos} />
         <DataField label="N° de afiliado / beneficiario" value={datos?.nroAfiliado} />

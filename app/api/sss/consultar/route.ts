@@ -6,6 +6,7 @@ import type { SisaCobertura, SisaSexo } from '@/lib/sisa-api'
 const SSS_BASE = 'https://www.sssalud.gob.ar'
 const SSS_SUBMIT = `${SSS_BASE}/index.php?page=bus650&user=GRAL&cat=consultas`
 const SSS_PAGE = `${SSS_BASE}/index.php?user=GRAL&page=bus650`
+
 export interface SssConsultaBody {
   dni: string
   sexo: SisaSexo
@@ -14,18 +15,9 @@ export interface SssConsultaBody {
   captchaSid: string
 }
 
-/**
- * POST /api/sss/consultar
- *
- * Envía el formulario bus650 de SSS con el código CAPTCHA resuelto por el usuario.
- * Parsea la respuesta HTML y devuelve datos de cobertura estructurados.
- * Guarda en cache de Postgres para futuras consultas.
- */
 export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
-  }
+  if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
 
   let body: SssConsultaBody
   try {
@@ -35,22 +27,16 @@ export async function POST(request: NextRequest) {
   }
 
   const { dni, sexo, captchaCode, phpSessId, captchaSid } = body
-
   if (!dni || !captchaCode || !phpSessId || !captchaSid) {
-    return NextResponse.json(
-      { error: 'Faltan parámetros: dni, captchaCode, phpSessId, captchaSid' },
-      { status: 400 },
-    )
+    return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
   }
 
-  // DNI limpio
   const dniLimpio = dni.replace(/[.\s-]/g, '').trim()
   if (!/^\d{7,8}$/.test(dniLimpio)) {
     return NextResponse.json({ error: 'DNI inválido' }, { status: 400 })
   }
 
   try {
-    // ── Enviar formulario a SSS ───────────────────────────────────────────────
     const formData = new URLSearchParams()
     formData.set('pagina_consulta', '')
     formData.set('cuil_b', '')
@@ -63,8 +49,7 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Cookie: `PHPSESSID=${phpSessId}`,
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         Referer: SSS_PAGE,
         Origin: SSS_BASE,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -78,258 +63,211 @@ export async function POST(request: NextRequest) {
 
     const html = await sssRes.text()
 
-    // ── Parsear respuesta HTML ────────────────────────────────────────────────
-    const resultado = parsearRespuestaSSS(html, dniLimpio, sexo)
+    // Loguear HTML para debugging en Vercel (primeros 4000 chars)
+    console.log('[SSS HTML]', html.slice(0, 4000))
 
-    // No guardamos automáticamente — el usuario elige con el botón "Guardar en DB"
+    const resultado = parsearRespuestaSSS(html, dniLimpio, sexo)
     return NextResponse.json({ ...resultado, fuente: 'sss-web' })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.error('[SSS Consultar]', msg)
-    return NextResponse.json(
-      { error: `Error al consultar SSS: ${msg}` },
-      { status: 502 },
-    )
+    return NextResponse.json({ error: `Error al consultar SSS: ${msg}` }, { status: 502 })
   }
 }
 
-// ── Parser HTML de SSS ────────────────────────────────────────────────────────
+// ── Parser ────────────────────────────────────────────────────────────────────
 
 interface SssResultado {
   encontrado: boolean
   captchaIncorrecto?: boolean
   mensaje?: string
   datos?: SisaCobertura
-  rawHtml?: string
 }
 
-function parsearRespuestaSSS(
-  html: string,
-  dni: string,
-  sexo: SisaSexo,
-): SssResultado {
+// RNOS: código numérico de 6 dígitos o formateado como "X-XXXX-X"
+const RNOS_RE = /^\d{6}$|^\d-\d{3,4}-\d{1,2}$/
+
+// Palabras que aparecen en nombres de obras sociales (no en nombres de personas)
+const OS_KEYWORDS = [
+  'obra social', 'prepaga', 'medicina', 'salud', 'mutual', 'osde', 'swiss',
+  'galeno', 'medicus', 'omint', 'accord', 'ioma', 'dosep', 'osplad', 'ospacp',
+  'osecac', 'pami', 'inssjp', 'jubilados', 'pensionados', 'docentes', 'bancarios',
+  'comercio', 'metalurgicos', 'camioneros', 'smata', 'sancor', 'luis pasteur',
+  'federada', 'caja', 'provincial', 'municipal', 'empleados', 'trabajadores',
+]
+
+function esNombreOS(val: string): boolean {
+  const v = val.toLowerCase()
+  return OS_KEYWORDS.some((k) => v.includes(k)) || val.length > 15
+}
+
+function esRnos(val: string): boolean {
+  return RNOS_RE.test(val.trim())
+}
+
+function parsearRespuestaSSS(html: string, dni: string, sexo: SisaSexo): SssResultado {
   const lower = html.toLowerCase()
 
-  // ── CAPTCHA incorrecto ──────────────────────────────────────────────────────
+  // ── CAPTCHA incorrecto ────────────────────────────────────────────────────
   if (
     lower.includes('código de seguridad incorrecto') ||
     lower.includes('codigo de seguridad incorrecto') ||
-    lower.includes('captcha') && lower.includes('incorrecto') ||
     lower.includes('incorrect security code') ||
     lower.includes('the security code entered was incorrect')
   ) {
     return { encontrado: false, captchaIncorrecto: true, mensaje: 'Código CAPTCHA incorrecto. Intentá de nuevo.' }
   }
 
-  // ── Sin resultados ──────────────────────────────────────────────────────────
-  const sinResultados =
+  // ── Sin resultados ────────────────────────────────────────────────────────
+  if (
     lower.includes('no se encontraron') ||
     lower.includes('sin resultados') ||
     lower.includes('no existen beneficiarios') ||
-    lower.includes('no encontrado') ||
-    lower.includes('not found') ||
     lower.includes('0 resultado')
-
-  if (sinResultados) {
-    return {
-      encontrado: false,
-      mensaje: 'No se encontraron beneficiarios para ese DNI en SSS.',
-    }
+  ) {
+    return { encontrado: false, mensaje: 'No figura en el padrón de SSS.' }
   }
 
-  // ── Buscar tabla de resultados ──────────────────────────────────────────────
-  // La SSS devuelve una tabla HTML con las columnas de beneficiarios.
-  // Extraemos filas de <tr> dentro de la tabla de resultados.
+  // ── Parsear todas las tablas ──────────────────────────────────────────────
+  const tables = [...html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi)].map((m) => m[0])
 
-  // Intentar con tabla que contiene datos de afiliados
-  const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/gi)
+  for (const table of tables) {
+    const tLow = table.toLowerCase()
+    if (
+      !tLow.includes('agente') &&
+      !tLow.includes('apellido') &&
+      !tLow.includes('beneficiario') &&
+      !tLow.includes('obra social')
+    ) continue
 
-  if (tableMatch) {
-    for (const table of tableMatch) {
-      const tLower = table.toLowerCase()
-      // La tabla de resultados suele contener palabras clave como
-      // "beneficiario", "agente", "obra social", "apellido"
-      if (
-        tLower.includes('beneficiario') ||
-        tLower.includes('agente') ||
-        tLower.includes('apellido') ||
-        tLower.includes('obra social')
-      ) {
-        const datos = extraerDatosDeTabla(table, dni, sexo)
-        if (datos) {
-          return { encontrado: true, datos }
-        }
-      }
-    }
+    const datos = extraerDatosSSS(table, dni, sexo)
+    if (datos) return { encontrado: true, datos }
   }
 
-  // ── Intentar extracción de campos individuales desde el HTML ─────────────
-  const datosDirectos = extraerDatosDirectos(html, dni, sexo)
-  if (datosDirectos) {
-    return { encontrado: true, datos: datosDirectos }
-  }
-
-  // ── Respuesta desconocida — devolver HTML para debugging en dev ────────────
-  const esProduccion = process.env.NODE_ENV === 'production'
-  return {
-    encontrado: false,
-    mensaje: 'Respuesta de SSS no interpretable. Intentá de nuevo.',
-    ...(esProduccion ? {} : { rawHtml: html.slice(0, 2000) }),
-  }
+  return { encontrado: false, mensaje: 'Respuesta de SSS no interpretable. Intentá de nuevo.' }
 }
 
-/** Extrae datos desde filas <tr> de la tabla de resultados */
-function extraerDatosDeTabla(
-  tableHtml: string,
-  dni: string,
-  sexo: SisaSexo,
-): SisaCobertura | null {
-  // Extraer todas las celdas <td>
-  const cells = [...tableHtml.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
-    .map((m) => limpiarHtml(m[1]))
-    .filter(Boolean)
+function extraerDatosSSS(table: string, dni: string, sexo: SisaSexo): SisaCobertura | null {
+  // Extraer headers
+  const headers = [...table.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)]
+    .map((m) => clean(m[1]).toLowerCase())
 
-  if (cells.length < 2) return null
+  // Extraer filas de datos (sin la de headers)
+  const dataRows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((r) => r[1])
+    .filter((r) => /<td/i.test(r) && !/<th/i.test(r))
 
-  // Buscar headers para saber el orden de columnas
-  const headers = [...tableHtml.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)]
-    .map((m) => limpiarHtml(m[1]).toLowerCase())
+  for (const row of dataRows) {
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
+      .map((m) => clean(m[1]))
+      .filter(Boolean)
 
-  let apellido: string | undefined
-  let nombre: string | undefined
-  let obraSocial: string | undefined
-  let rnos: string | undefined
-  let nroAfiliado: string | undefined
-  let estado: string | undefined
+    if (cells.length < 2) continue
 
-  if (headers.length > 0) {
-    // Tenemos headers — mapear columnas
-    // Los datos están en filas de datos (pueden ser múltiples)
-    const dataRows = [...tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)]
-      .map((r) => r[1])
-      .filter((r) => !r.toLowerCase().includes('<th'))
+    let apellido: string | undefined
+    let nombre:   string | undefined
+    let obraSocial: string | undefined
+    let rnos:     string | undefined
+    let nroAfiliado: string | undefined
+    let estado:   string | undefined
 
-    for (const row of dataRows) {
-      const rowCells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
-        .map((m) => limpiarHtml(m[1]))
+    if (headers.length >= cells.length) {
+      // ── Mapeo por header ────────────────────────────────────────────────
+      headers.forEach((h, i) => {
+        const v = cells[i]
+        if (!v) return
 
-      if (rowCells.length === 0) continue
-
-      // Mapear según headers
-      headers.forEach((header, i) => {
-        const val = rowCells[i]
-        if (!val) return
-        if (header.includes('apellido') || header.includes('nombre')) {
-          // Puede ser "apellido y nombre" en una celda o separados
-          if (header.includes('apellido') && header.includes('nombre')) {
-            const partes = val.split(',').map((s) => s.trim())
-            apellido = partes[0]
-            nombre = partes[1]
-          } else if (header.includes('apellido')) {
-            apellido = val
-          } else if (header.includes('nombre')) {
-            nombre = val
-          }
-        } else if (header.includes('agente') || header.includes('obra') || header.includes('cobertura')) {
-          obraSocial = val
-        } else if (header.includes('rnos') || header.includes('código')) {
-          rnos = val
-        } else if (header.includes('beneficiario') || header.includes('afiliado') || header.includes('n°')) {
-          nroAfiliado = val
-        } else if (header.includes('estado') || header.includes('vigencia')) {
-          estado = val
+        if ((h.includes('apellido') && h.includes('nombre')) || h === 'beneficiario') {
+          const p = v.split(',').map((s) => s.trim())
+          apellido = p[0]; nombre = p[1]
+        } else if (h.includes('apellido')) {
+          apellido = v
+        } else if (h === 'nombre') {
+          nombre = v
+        } else if (h.includes('agente') || h.includes('obra social') || h.includes('cobertura')) {
+          obraSocial = v
+        } else if (h.includes('rnos') || h.includes('código agente') || h.includes('cod.')) {
+          rnos = v
+        } else if (h.includes('n°') || h.includes('nro') || h.includes('número') || h.includes('afiliado')) {
+          nroAfiliado = v
+        } else if (h.includes('estado') || h.includes('vigencia')) {
+          estado = v
         }
       })
-
-      // Si al menos obtuvimos obra social, devolvemos
-      if (obraSocial || apellido) break
     }
-  } else {
-    // Sin headers — intentar inferir por posición o por contenido
-    // Buscar celdas que parezcan nombres o obras sociales
-    for (let i = 0; i < cells.length; i++) {
-      const cell = cells[i]
-      const cellLow = cell.toLowerCase()
-      if (cellLow.includes('osde') || cellLow.includes('swiss') || cellLow.includes('galeno') ||
-          cellLow.includes('obra') || cellLow.includes('prepaga') || cellLow.includes('ioma') ||
-          cellLow.includes('pami') || cellLow.includes('osecac') || cellLow.includes('medicus') ||
-          cellLow.includes('omint') || cellLow.includes('accord')) {
-        obraSocial = cell
-      }
-      // DNI suele estar como número 7-8 dígitos
-      if (/^\d{7,8}$/.test(cell) && cell !== dni) {
-        nroAfiliado = cell
+
+    // ── Si el mapeo por header falló, usar detección por contenido ──────────
+    if (!obraSocial && !apellido) {
+      for (const cell of cells) {
+        if (!cell) continue
+        if (esRnos(cell)) {
+          rnos = rnos ?? cell
+        } else if (esNombreOS(cell)) {
+          obraSocial = obraSocial ?? cell
+        } else if (/^\d{6,12}$/.test(cell) && cell !== dni) {
+          nroAfiliado = nroAfiliado ?? cell
+        } else if (/^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]+$/.test(cell) && cell.length > 3) {
+          if (!apellido) apellido = cell
+          else if (!nombre) nombre = cell
+        }
       }
     }
-    // Primer par de celdas alfabéticas = apellido, nombre
-    const textos = cells.filter((c) => /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ ]+$/.test(c))
-    if (textos.length >= 2) {
-      apellido = textos[0]
-      nombre = textos[1]
-    } else if (textos.length === 1) {
-      apellido = textos[0]
+
+    // ── Resolver obraSocial/rnos mezclados ───────────────────────────────────
+    // Si obraSocial parece un RNOS y rnos parece un nombre de OS, intercambiar
+    if (obraSocial && esRnos(obraSocial) && !rnos) {
+      rnos = obraSocial
+      obraSocial = undefined
+    }
+    if (rnos && esNombreOS(rnos) && !obraSocial) {
+      obraSocial = rnos
+      rnos = undefined
+    }
+
+    if (!apellido && !obraSocial) continue
+
+    const fechaNac = extraerFechaNac(table)
+    const edad = calcularEdad(fechaNac)
+
+    return {
+      dni,
+      sexo,
+      apellido,
+      nombre,
+      fechaNacimiento: fechaNac,
+      obraSocial,
+      rnos,
+      nroAfiliado,
+      estado,
+      vigencia: estado?.toLowerCase().includes('vigente') ? 'VIGENTE' : undefined,
+      ...(edad !== null ? { _edad: edad } as any : {}),
     }
   }
 
-  if (!apellido && !obraSocial) return null
-
-  return {
-    dni,
-    sexo,
-    apellido,
-    nombre,
-    obraSocial,
-    rnos,
-    nroAfiliado,
-    estado,
-    vigencia: estado?.toLowerCase().includes('vigente') ? 'VIGENTE' : estado,
-  }
+  return null
 }
 
-/** Extrae datos buscando patrones clave directamente en el HTML */
-function extraerDatosDirectos(
-  html: string,
-  dni: string,
-  sexo: SisaSexo,
-): SisaCobertura | null {
-  // Buscar el DNI en el HTML para confirmar que hay datos
-  if (!html.includes(dni) && !html.includes(dni.replace(/^0/, ''))) {
-    return null
-  }
-
-  // Patrón: buscar texto después de etiquetas conocidas
-  const extraer = (patron: RegExp) => {
-    const m = html.match(patron)
-    return m ? limpiarHtml(m[1]).trim() : undefined
-  }
-
-  const apellido = extraer(/Apellido[^:]*:\s*<[^>]*>([^<]+)/i)
-  const nombre = extraer(/Nombre[^:]*:\s*<[^>]*>([^<]+)/i)
-  const obraSocial =
-    extraer(/Agente del Seguro[^:]*:\s*<[^>]*>([^<]+)/i) ??
-    extraer(/Obra Social[^:]*:\s*<[^>]*>([^<]+)/i) ??
-    extraer(/Cobertura[^:]*:\s*<[^>]*>([^<]+)/i)
-  const rnos = extraer(/RNOS[^:]*:\s*<[^>]*>([^<]+)/i)
-  const nroAfiliado = extraer(/(?:N[°º]?\s*)?(?:Beneficiario|Afiliado)[^:]*:\s*<[^>]*>([^<]+)/i)
-  const estado = extraer(/Estado[^:]*:\s*<[^>]*>([^<]+)/i)
-
-  if (!apellido && !obraSocial) return null
-
-  return {
-    dni,
-    sexo,
-    apellido,
-    nombre,
-    obraSocial,
-    rnos,
-    nroAfiliado,
-    estado,
-    vigencia: estado?.toLowerCase().includes('vigente') ? 'VIGENTE' : estado,
-  }
+/** Busca fecha de nacimiento en formato DD/MM/YYYY en el HTML */
+function extraerFechaNac(html: string): string | undefined {
+  const m = html.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)
+  return m ? m[1] : undefined
 }
 
-/** Elimina tags HTML y decodifica entidades básicas */
-function limpiarHtml(html: string): string {
+function calcularEdad(fechaDDMMYYYY?: string): number | null {
+  if (!fechaDDMMYYYY) return null
+  const p = fechaDDMMYYYY.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+  if (!p) return null
+  const nac = new Date(Number(p[3]), Number(p[2]) - 1, Number(p[1]))
+  const hoy = new Date()
+  let edad = hoy.getFullYear() - nac.getFullYear()
+  const cumplioEsteAnio =
+    hoy.getMonth() > nac.getMonth() ||
+    (hoy.getMonth() === nac.getMonth() && hoy.getDate() >= nac.getDate())
+  if (!cumplioEsteAnio) edad--
+  return edad >= 0 && edad < 150 ? edad : null
+}
+
+function clean(html: string): string {
   return html
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
@@ -337,7 +275,7 @@ function limpiarHtml(html: string): string {
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#(\d+);/g, (_, c) => String.fromCharCode(Number(c)))
     .replace(/\s+/g, ' ')
     .trim()
 }
