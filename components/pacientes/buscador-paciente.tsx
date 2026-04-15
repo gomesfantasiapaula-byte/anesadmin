@@ -10,6 +10,7 @@ import {
   Loader2,
   RefreshCw,
   CheckCircle2,
+  Save,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -323,7 +324,7 @@ export function BuscadorPaciente() {
 
       {/* ── Resultado ── */}
       {modo === 'resultado' && resultado && (
-        <ResultadoCard resultado={resultado} dniActual={dniLimpio} />
+        <ResultadoCard resultado={resultado} dniActual={dniLimpio} sexo={sexo} />
       )}
     </div>
   )
@@ -334,14 +335,44 @@ export function BuscadorPaciente() {
 function ResultadoCard({
   resultado,
   dniActual,
+  sexo,
 }: {
   resultado: ResultadoPaciente
   dniActual: string
+  sexo: 'M' | 'F'
 }) {
+  const [guardando, setGuardando] = useState(false)
+  const [guardado, setGuardado] = useState(false)
+
   // El API de SSS devuelve { encontrado, datos } mientras que PUCO devuelve { data }
   const encontrado = resultado.encontrado ?? (resultado.data && !resultado.data.sinCredenciales)
   const datos: SisaCobertura | undefined =
     resultado.datos ?? resultado.data
+
+  const esSssFuente = resultado.fuente === 'sss-web'
+
+  const guardarEnDB = async () => {
+    if (!datos || guardado) return
+    setGuardando(true)
+    try {
+      const res = await fetch('/api/pacientes/guardar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dni: dniActual, sexo, datos }),
+      })
+      if (res.ok) {
+        setGuardado(true)
+        toast.success('Paciente guardado en la base de datos')
+      } else {
+        const j = await res.json()
+        toast.error(j.error ?? 'Error al guardar')
+      }
+    } catch {
+      toast.error('Error de red al guardar')
+    } finally {
+      setGuardando(false)
+    }
+  }
 
   // ── Sin datos / no encontrado ─────────────────────────────────────────────
   if (!encontrado || !datos) {
@@ -403,13 +434,35 @@ function ResultadoCard({
       </div>
 
       {/* Footer */}
-      <p className="mt-4 text-right text-xs text-text-secondary/50">
-        {resultado.fuente === 'sss-web'
-          ? 'Dato en tiempo real · Superintendencia de Servicios de Salud'
-          : resultado.fuente === 'api-sisa'
-          ? 'Dato en tiempo real · PUCO/SISA MSAL'
-          : 'Dato en caché (24hs)'}
-      </p>
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <p className="text-xs text-text-secondary/50">
+          {resultado.fuente === 'sss-web'
+            ? 'Dato en tiempo real · Superintendencia de Servicios de Salud'
+            : resultado.fuente === 'api-sisa'
+            ? 'Dato en tiempo real · PUCO/SISA MSAL'
+            : 'Dato en caché (24hs)'}
+        </p>
+
+        {/* Botón guardar — solo para resultados SSS en tiempo real, no cache */}
+        {esSssFuente && (
+          <button
+            onClick={guardarEnDB}
+            disabled={guardando || guardado}
+            className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+              guardado
+                ? 'text-success bg-success/10 cursor-default'
+                : 'text-accent-primary border border-accent-primary/30 hover:bg-accent-primary/10 disabled:opacity-50'
+            }`}
+          >
+            {guardando ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Save size={13} />
+            )}
+            {guardado ? 'Guardado en DB' : 'Guardar en DB'}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

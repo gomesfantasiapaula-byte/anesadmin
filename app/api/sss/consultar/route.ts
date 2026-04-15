@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { patientsCache } from '@/lib/db/schema'
 import type { SisaCobertura, SisaSexo } from '@/lib/sisa-api'
 
 const SSS_BASE = 'https://www.sssalud.gob.ar'
@@ -83,22 +81,7 @@ export async function POST(request: NextRequest) {
     // ── Parsear respuesta HTML ────────────────────────────────────────────────
     const resultado = parsearRespuestaSSS(html, dniLimpio, sexo)
 
-    // ── Guardar en cache Postgres si encontró datos ───────────────────────────
-    if (resultado.encontrado && resultado.datos) {
-      try {
-        await db
-          .insert(patientsCache)
-          .values({ dni: dniLimpio, sexo, dataJson: resultado.datos })
-          .onConflictDoUpdate({
-            target: [patientsCache.dni, patientsCache.sexo],
-            set: { dataJson: resultado.datos, fetchedAt: new Date() },
-          })
-      } catch (e) {
-        // No bloquear la respuesta si falla el cache
-        console.warn('[SSS] Error guardando en cache:', e)
-      }
-    }
-
+    // No guardamos automáticamente — el usuario elige con el botón "Guardar en DB"
     return NextResponse.json({ ...resultado, fuente: 'sss-web' })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
