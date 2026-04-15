@@ -22,6 +22,8 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
+  // viewportFit=cover para que env(safe-area-inset-*) funcione en iPhone con notch
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({
