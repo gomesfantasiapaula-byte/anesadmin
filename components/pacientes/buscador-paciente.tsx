@@ -11,6 +11,7 @@ import {
   RefreshCw,
   CheckCircle2,
   Save,
+  ChevronRight,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -19,23 +20,32 @@ import type { SisaCobertura } from '@/lib/sisa-api'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
-interface ResultadoPaciente {
-  data: SisaCobertura
-  fuente: 'cache' | 'cache-db' | 'api-sisa' | 'sss-web'
-  urlSSS?: string
-  encontrado?: boolean
-  mensaje?: string
-  captchaIncorrecto?: boolean
+type Fuente = 'pami' | 'osplad' | 'sss-web' | 'cache' | 'cache-db' | 'api-sisa'
+
+interface ResultadoFuente {
+  fuente: Fuente
+  encontrado: boolean
   datos?: SisaCobertura
+  mensaje?: string
+  // SSS específico
+  captchaIncorrecto?: boolean
+  urlSSS?: string
 }
 
 interface CaptchaState {
-  image: string       // data:image/png;base64,...
+  image: string
   sid: string
   sessId: string
 }
 
-type Modo = 'idle' | 'captcha' | 'cargando-captcha' | 'enviando' | 'resultado'
+const FUENTE_LABEL: Record<Fuente, string> = {
+  pami: 'PAMI / INSSJP',
+  osplad: 'OSPLAD',
+  'sss-web': 'SSS',
+  cache: 'Caché local',
+  'cache-db': 'Caché local',
+  'api-sisa': 'PUCO/SISA MSAL',
+}
 
 // ── Componente principal ──────────────────────────────────────────────────────
 
@@ -43,147 +53,146 @@ export function BuscadorPaciente() {
   const [dni, setDni] = useState('')
   const [sexo, setSexo] = useState<'M' | 'F'>('F')
 
-  // Modo de la UI
-  const [modo, setModo] = useState<Modo>('idle')
+  // Estados de UI
+  const [buscandoAuto, setBuscandoAuto] = useState(false)
+  const [resultadosAuto, setResultadosAuto] = useState<ResultadoFuente[]>([])
+  const [buscado, setBuscado] = useState(false)
 
   // SSS CAPTCHA
+  const [mostrarSSS, setMostrarSSS] = useState(false)
+  const [cargandoCaptcha, setCargandoCaptcha] = useState(false)
   const [captcha, setCaptcha] = useState<CaptchaState | null>(null)
   const [codigoCaptcha, setCodigoCaptcha] = useState('')
+  const [enviandoSSS, setEnviandoSSS] = useState(false)
+  const [resultadoSSS, setResultadoSSS] = useState<ResultadoFuente | null>(null)
 
-  // Resultado final
-  const [resultado, setResultado] = useState<ResultadoPaciente | null>(null)
-
-  // ── Validación básica ─────────────────────────────────────────────────────
   const dniLimpio = dni.replace(/[.\s-]/g, '').trim()
   const dniValido = /^\d{7,8}$/.test(dniLimpio)
 
-  // ── Paso 1: chequear cache, luego solicitar CAPTCHA ──────────────────────
-  const pedirCaptcha = useCallback(async () => {
-    if (!dniValido) {
-      toast.error('Ingresá un DNI válido (7 u 8 dígitos)')
-      return
-    }
+  // ── Búsqueda automática (PAMI + OSPLAD + cache) ───────────────────────────
+  const buscarAuto = useCallback(async () => {
+    if (!dniValido) { toast.error('Ingresá un DNI válido (7 u 8 dígitos)'); return }
 
-    setModo('cargando-captcha')
+    setBuscandoAuto(true)
+    setBuscado(false)
+    setResultadosAuto([])
+    setResultadoSSS(null)
+    setMostrarSSS(false)
     setCaptcha(null)
     setCodigoCaptcha('')
-    setResultado(null)
 
-    try {
-      // Primero: revisar cache (KV + Postgres) antes de pedir CAPTCHA
-      const cacheRes = await fetch(
-        `/api/pacientes/dni?dni=${encodeURIComponent(dniLimpio)}&sexo=${sexo}`,
-      )
-      const cacheJson = await cacheRes.json()
+    // Consultas paralelas: cache + PAMI + OSPLAD
+    const [cacheRes, pamiRes, ospladRes] = await Promise.allSettled([
+      fetch(`/api/pacientes/dni?dni=${dniLimpio}&sexo=${sexo}`).then((r) => r.json()),
+      fetch(`/api/pami/consultar?dni=${dniLimpio}&sexo=${sexo}`).then((r) => r.json()),
+      fetch(`/api/osplad/consultar?dni=${dniLimpio}&sexo=${sexo}`).then((r) => r.json()),
+    ])
 
-      if (cacheRes.ok && cacheJson.data && !cacheJson.data.sinCredenciales && !cacheJson.data.sinDatos) {
-        // ¡Dato en cache! Mostrarlo directo sin CAPTCHA
-        setResultado({
-          data: cacheJson.data,
-          fuente: cacheJson.fuente,
-          encontrado: true,
-          datos: cacheJson.data,
-        })
-        setModo('resultado')
-        return
+    const resultados: ResultadoFuente[] = []
+
+    // Cache local
+    if (cacheRes.status === 'fulfilled') {
+      const j = cacheRes.value
+      if (j.data && !j.data.sinCredenciales && !j.data.sinDatos) {
+        resultados.push({ fuente: j.fuente ?? 'cache', encontrado: true, datos: j.data })
       }
-    } catch {
-      // Si falla el cache, continuar con CAPTCHA igual
     }
 
-    // No hay cache → pedir CAPTCHA a SSS
+    // PAMI
+    if (pamiRes.status === 'fulfilled') {
+      const j = pamiRes.value
+      if (!j.error) resultados.push({ fuente: 'pami', encontrado: j.encontrado, datos: j.datos, mensaje: j.mensaje })
+    }
+
+    // OSPLAD
+    if (ospladRes.status === 'fulfilled') {
+      const j = ospladRes.value
+      if (!j.error) resultados.push({ fuente: 'osplad', encontrado: j.encontrado, datos: j.datos, mensaje: j.mensaje })
+    }
+
+    setResultadosAuto(resultados)
+    setBuscandoAuto(false)
+    setBuscado(true)
+  }, [dniValido, dniLimpio, sexo])
+
+  // ── SSS: pedir CAPTCHA ────────────────────────────────────────────────────
+  const pedirCaptchaSSS = useCallback(async () => {
+    setMostrarSSS(true)
+    setCargandoCaptcha(true)
+    setCaptcha(null)
+    setCodigoCaptcha('')
+    setResultadoSSS(null)
+
     try {
       const res = await fetch('/api/sss/captcha')
       const json = await res.json()
-
-      if (!res.ok) {
-        toast.error(json.error ?? 'Error al obtener CAPTCHA de SSS')
-        setModo('idle')
-        return
-      }
-
-      setCaptcha({
-        image: json.captchaImage,
-        sid: json.captchaSid,
-        sessId: json.phpSessId,
-      })
-      setModo('captcha')
+      if (!res.ok) { toast.error(json.error ?? 'Error al obtener CAPTCHA de SSS'); setCargandoCaptcha(false); return }
+      setCaptcha({ image: json.captchaImage, sid: json.captchaSid, sessId: json.phpSessId })
     } catch {
       toast.error('Error de red al contactar SSS')
-      setModo('idle')
+    } finally {
+      setCargandoCaptcha(false)
     }
-  }, [dniValido, dniLimpio, sexo])
+  }, [])
 
-  // ── Paso 2: enviar formulario ─────────────────────────────────────────────
-  const consultar = useCallback(async () => {
-    if (!captcha || !codigoCaptcha.trim()) {
-      toast.error('Ingresá el código de la imagen')
-      return
-    }
+  // ── SSS: enviar formulario ────────────────────────────────────────────────
+  const consultarSSS = useCallback(async () => {
+    if (!captcha || !codigoCaptcha.trim()) { toast.error('Ingresá el código de la imagen'); return }
 
-    setModo('enviando')
-
+    setEnviandoSSS(true)
     try {
       const res = await fetch('/api/sss/consultar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dni: dniLimpio,
-          sexo,
-          captchaCode: codigoCaptcha.trim(),
-          phpSessId: captcha.sessId,
-          captchaSid: captcha.sid,
-        }),
+        body: JSON.stringify({ dni: dniLimpio, sexo, captchaCode: codigoCaptcha.trim(), phpSessId: captcha.sessId, captchaSid: captcha.sid }),
       })
+      const json = await res.json()
 
-      const json: ResultadoPaciente = await res.json()
+      if (!res.ok) { toast.error(json.error ?? 'Error al consultar SSS'); return }
 
-      if (!res.ok) {
-        toast.error((json as any).error ?? 'Error al consultar SSS')
-        setModo('captcha')
-        return
-      }
-
-      // CAPTCHA incorrecto → renovar automáticamente
       if (json.captchaIncorrecto) {
         toast.error('Código incorrecto. Cargando nuevo CAPTCHA…')
-        await pedirCaptcha()
+        await pedirCaptchaSSS()
         return
       }
 
-      setResultado(json)
-      setModo('resultado')
+      setResultadoSSS({ fuente: 'sss-web', encontrado: json.encontrado, datos: json.datos, mensaje: json.mensaje })
     } catch {
       toast.error('Error de red')
-      setModo('captcha')
+    } finally {
+      setEnviandoSSS(false)
     }
-  }, [captcha, codigoCaptcha, dniLimpio, sexo, pedirCaptcha])
+  }, [captcha, codigoCaptcha, dniLimpio, sexo, pedirCaptchaSSS])
 
   const reiniciar = () => {
-    setModo('idle')
-    setResultado(null)
+    setDni('')
+    setBuscado(false)
+    setResultadosAuto([])
+    setResultadoSSS(null)
+    setMostrarSSS(false)
     setCaptcha(null)
     setCodigoCaptcha('')
   }
 
+  const hayResultadosPositivos = resultadosAuto.some((r) => r.encontrado)
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
-      {/* ── Formulario DNI ── */}
+      {/* ── Formulario ── */}
       <div className="card">
         <h2 className="text-base font-semibold text-text-primary mb-4">
           Consultar cobertura por DNI
         </h2>
 
         <div className="flex flex-col sm:flex-row gap-3">
-          {/* Sexo */}
           <div className="flex rounded-xl overflow-hidden border border-border flex-shrink-0">
             {(['F', 'M'] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setSexo(s)}
-                disabled={modo !== 'idle' && modo !== 'resultado'}
+                disabled={buscandoAuto}
                 className={`px-4 py-3 text-sm font-medium transition-colors disabled:opacity-50 ${
                   sexo === s
                     ? 'bg-accent-primary text-background'
@@ -195,161 +204,163 @@ export function BuscadorPaciente() {
             ))}
           </div>
 
-          {/* DNI */}
           <div className="flex-1">
             <Input
               placeholder="Ej: 12345678"
               value={dni}
-              onChange={(e) => { setDni(e.target.value); setModo('idle') }}
-              onKeyDown={(e) => e.key === 'Enter' && pedirCaptcha()}
+              onChange={(e) => { setDni(e.target.value); setBuscado(false) }}
+              onKeyDown={(e) => e.key === 'Enter' && buscarAuto()}
               icon={<Search size={16} />}
               type="number"
               inputMode="numeric"
-              disabled={modo === 'enviando' || modo === 'cargando-captcha'}
+              disabled={buscandoAuto}
             />
           </div>
 
-          {modo === 'resultado' ? (
-            <Button
-              onClick={reiniciar}
-              variant="secondary"
-              icon={<Search size={16} />}
-              size="lg"
-              className="flex-shrink-0"
-            >
+          {buscado ? (
+            <Button onClick={reiniciar} variant="secondary" icon={<Search size={16} />} size="lg" className="flex-shrink-0">
               Nueva consulta
             </Button>
           ) : (
-            <Button
-              onClick={pedirCaptcha}
-              loading={modo === 'cargando-captcha'}
-              icon={<Search size={16} />}
-              size="lg"
-              className="flex-shrink-0"
-              disabled={!dniValido || modo === 'enviando'}
-            >
+            <Button onClick={buscarAuto} loading={buscandoAuto} icon={<Search size={16} />} size="lg" className="flex-shrink-0" disabled={!dniValido}>
               Buscar
             </Button>
           )}
         </div>
 
-        {/* Fuente */}
         <p className="mt-3 text-xs text-text-secondary/60">
-          Consulta vía{' '}
-          <a
-            href="https://www.sssalud.gob.ar"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-text-secondary"
-          >
-            Superintendencia de Servicios de Salud
-          </a>
-          {' '}· El código de verificación lo resolvés vos.
+          Consulta automática en PAMI e IBSA · También podés buscar en SSS con verificación manual
         </p>
       </div>
 
-      {/* ── CAPTCHA ── */}
-      {(modo === 'captcha' || modo === 'enviando') && captcha && (
-        <div className="card space-y-4 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-text-primary">
-              Verificación de seguridad — SSS
-            </h3>
-            <button
-              onClick={pedirCaptcha}
-              disabled={modo === 'enviando'}
-              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40"
-            >
-              <RefreshCw size={13} />
-              Renovar imagen
-            </button>
-          </div>
+      {/* ── Cargando ── */}
+      {buscandoAuto && (
+        <div className="card flex items-center gap-3 py-8 justify-center">
+          <Loader2 size={24} className="text-accent-primary animate-spin" />
+          <span className="text-text-secondary text-sm">Consultando PAMI y OSPLAD…</span>
+        </div>
+      )}
 
-          {/* Imagen CAPTCHA */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={captcha.image}
-              alt="Código de verificación SSS"
-              className="rounded-lg border border-border h-16 bg-white"
-              draggable={false}
-            />
+      {/* ── Resultados automáticos ── */}
+      {buscado && !buscandoAuto && (
+        <div className="space-y-4">
+          {resultadosAuto.map((r) => (
+            <TarjetaResultado key={r.fuente} resultado={r} dniActual={dniLimpio} sexo={sexo} />
+          ))}
 
-            <div className="flex-1 space-y-2 w-full sm:w-auto">
-              <label className="text-xs text-text-secondary">
-                Escribí el texto que ves en la imagen
-              </label>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Ej: k7m4p"
-                  value={codigoCaptcha}
-                  onChange={(e) => setCodigoCaptcha(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && consultar()}
-                  autoFocus
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  disabled={modo === 'enviando'}
-                  className="font-mono tracking-widest text-sm"
-                />
+          {/* ── Sección SSS ── */}
+          {!mostrarSSS ? (
+            <div className="card border-dashed border-border/60 bg-transparent">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-text-primary">Superintendencia de Servicios de Salud</p>
+                  <p className="text-xs text-text-secondary mt-0.5">
+                    Cubre obras sociales nacionales · Requiere resolver un CAPTCHA
+                  </p>
+                </div>
                 <Button
-                  onClick={consultar}
-                  loading={modo === 'enviando'}
-                  icon={<CheckCircle2 size={16} />}
-                  disabled={!codigoCaptcha.trim()}
+                  onClick={pedirCaptchaSSS}
+                  variant="secondary"
+                  icon={<ChevronRight size={15} />}
+                  size="sm"
+                  className="flex-shrink-0"
                 >
-                  Confirmar
+                  Consultar en SSS
                 </Button>
               </div>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* CAPTCHA SSS */}
+              {(cargandoCaptcha || captcha) && !resultadoSSS && (
+                <div className="card space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-text-primary">
+                      Verificación SSS
+                    </p>
+                    {captcha && (
+                      <button
+                        onClick={pedirCaptchaSSS}
+                        disabled={cargandoCaptcha || enviandoSSS}
+                        className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40"
+                      >
+                        <RefreshCw size={13} />
+                        Renovar
+                      </button>
+                    )}
+                  </div>
 
-          <p className="text-xs text-text-secondary/50">
-            DNI a consultar: <span className="font-mono">{dniLimpio}</span>
-            {' · '}Sexo: {sexo === 'F' ? 'Femenino' : 'Masculino'}
-          </p>
+                  {cargandoCaptcha ? (
+                    <div className="flex items-center gap-2 py-4">
+                      <Loader2 size={18} className="animate-spin text-accent-primary" />
+                      <span className="text-sm text-text-secondary">Cargando CAPTCHA…</span>
+                    </div>
+                  ) : captcha ? (
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={captcha.image}
+                        alt="Código de verificación SSS"
+                        className="rounded-lg border border-border h-14 bg-white"
+                        draggable={false}
+                      />
+                      <div className="flex gap-2 flex-1 w-full">
+                        <Input
+                          placeholder="Escribí el código"
+                          value={codigoCaptcha}
+                          onChange={(e) => setCodigoCaptcha(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && consultarSSS()}
+                          autoFocus
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          disabled={enviandoSSS}
+                          className="font-mono tracking-widest text-sm"
+                        />
+                        <Button
+                          onClick={consultarSSS}
+                          loading={enviandoSSS}
+                          icon={<CheckCircle2 size={15} />}
+                          disabled={!codigoCaptcha.trim()}
+                        >
+                          Confirmar
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Resultado SSS */}
+              {resultadoSSS && (
+                <TarjetaResultado resultado={resultadoSSS} dniActual={dniLimpio} sexo={sexo} />
+              )}
+            </>
+          )}
         </div>
-      )}
-
-      {/* ── Loader enviando ── */}
-      {modo === 'enviando' && (
-        <div className="card flex items-center justify-center py-10">
-          <Loader2 size={28} className="text-accent-primary animate-spin" />
-          <span className="ml-3 text-text-secondary text-sm">
-            Consultando Superintendencia de Servicios de Salud…
-          </span>
-        </div>
-      )}
-
-      {/* ── Resultado ── */}
-      {modo === 'resultado' && resultado && (
-        <ResultadoCard resultado={resultado} dniActual={dniLimpio} sexo={sexo} />
       )}
     </div>
   )
 }
 
-// ── Tarjeta de resultado ──────────────────────────────────────────────────────
+// ── Tarjeta de resultado por fuente ──────────────────────────────────────────
 
-function ResultadoCard({
+function TarjetaResultado({
   resultado,
   dniActual,
   sexo,
 }: {
-  resultado: ResultadoPaciente
+  resultado: ResultadoFuente
   dniActual: string
   sexo: 'M' | 'F'
 }) {
   const [guardando, setGuardando] = useState(false)
   const [guardado, setGuardado] = useState(false)
 
-  // El API de SSS devuelve { encontrado, datos } mientras que PUCO devuelve { data }
-  const encontrado = resultado.encontrado ?? (resultado.data && !resultado.data.sinCredenciales)
-  const datos: SisaCobertura | undefined =
-    resultado.datos ?? resultado.data
-
-  const esSssFuente = resultado.fuente === 'sss-web'
+  const { fuente, encontrado, datos, mensaje } = resultado
+  const esTiempoReal = fuente === 'sss-web' || fuente === 'pami' || fuente === 'osplad'
+  const esCache = fuente === 'cache' || fuente === 'cache-db'
 
   const guardarEnDB = async () => {
     if (!datos || guardado) return
@@ -360,91 +371,81 @@ function ResultadoCard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dni: dniActual, sexo, datos }),
       })
-      if (res.ok) {
-        setGuardado(true)
-        toast.success('Paciente guardado en la base de datos')
-      } else {
-        const j = await res.json()
-        toast.error(j.error ?? 'Error al guardar')
-      }
-    } catch {
-      toast.error('Error de red al guardar')
-    } finally {
-      setGuardando(false)
-    }
+      if (res.ok) { setGuardado(true); toast.success('Paciente guardado en la base de datos') }
+      else { const j = await res.json(); toast.error(j.error ?? 'Error al guardar') }
+    } catch { toast.error('Error de red al guardar') }
+    finally { setGuardando(false) }
   }
 
-  // ── Sin datos / no encontrado ─────────────────────────────────────────────
-  if (!encontrado || !datos) {
+  // ── No encontrado ──
+  if (!encontrado) {
     return (
-      <div className="card border-text-secondary/20 bg-surface/50 animate-fade-in">
-        <div className="flex items-start gap-3">
-          <AlertCircle size={20} className="text-text-secondary flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-semibold text-text-primary">
-              Sin cobertura encontrada
-            </p>
-            <p className="text-xs text-text-secondary mt-1">
-              {resultado.mensaje ?? 'No se encontraron beneficiarios para ese DNI en SSS.'}
+      <div className="card border-border/50 bg-surface/40">
+        <div className="flex items-center gap-3">
+          <AlertCircle size={18} className="text-text-secondary/60 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-text-secondary">
+              <span className="font-medium text-text-primary">{FUENTE_LABEL[fuente]}</span>
+              {' — '}{mensaje ?? 'No encontrado'}
             </p>
           </div>
+          <span className="text-xs text-text-secondary/40 flex-shrink-0">{FUENTE_LABEL[fuente]}</span>
         </div>
       </div>
     )
   }
 
-  const nombreCompleto = [datos.apellido, datos.nombre].filter(Boolean).join(', ')
-  const vigente = datos.vigencia === 'VIGENTE' || datos.estado?.toLowerCase().includes('vigente')
+  // ── Encontrado ──
+  const nombreCompleto = [datos?.apellido, datos?.nombre].filter(Boolean).join(', ')
+  const vigente = datos?.vigencia === 'VIGENTE' || datos?.estado?.toLowerCase().includes('vigente')
 
   return (
     <div className="card border-accent-primary/20 animate-fade-in">
       {/* Header */}
-      <div className="flex items-start gap-4 mb-6">
-        <div className="w-14 h-14 rounded-2xl bg-accent-primary/10 border border-accent-primary/20 flex items-center justify-center flex-shrink-0">
-          <User size={24} className="text-accent-primary" />
+      <div className="flex items-start gap-4 mb-5">
+        <div className="w-12 h-12 rounded-2xl bg-accent-primary/10 border border-accent-primary/20 flex items-center justify-center flex-shrink-0">
+          <User size={20} className="text-accent-primary" />
         </div>
-
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start justify-between gap-2 flex-wrap">
             <div>
-              <h3 className="text-lg font-bold text-text-primary">
+              <h3 className="text-base font-bold text-text-primary">
                 {nombreCompleto || 'Paciente encontrado'}
               </h3>
               <p className="text-text-secondary text-sm">
-                DNI {datos.dni || dniActual}
-                {datos.fechaNacimiento && ` · ${datos.fechaNacimiento}`}
+                DNI {datos?.dni || dniActual}
+                {datos?.fechaNacimiento && ` · ${datos.fechaNacimiento}`}
               </p>
             </div>
-            {(datos.vigencia || datos.estado) && (
-              <Badge variant={vigente ? 'success' : 'warning'}>
-                <ShieldCheck size={12} />
-                {datos.vigencia ?? datos.estado}
+            <div className="flex items-center gap-2 flex-wrap">
+              {(datos?.vigencia || datos?.estado) && (
+                <Badge variant={vigente ? 'success' : 'warning'}>
+                  <ShieldCheck size={11} />
+                  {datos?.vigencia ?? datos?.estado}
+                </Badge>
+              )}
+              <Badge variant="default">
+                {FUENTE_LABEL[fuente]}
               </Badge>
-            )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Datos de cobertura */}
+      {/* Datos */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-border">
-        <DataField label="Obra social / Agente del seguro" value={datos.obraSocial} />
-        <DataField label="Código RNOS" value={datos.rnos} />
-        <DataField label="N° de afiliado / beneficiario" value={datos.nroAfiliado} />
-        <DataField label="Estado de cobertura" value={datos.estado ?? datos.vigencia} />
+        <DataField label="Obra social / Agente del seguro" value={datos?.obraSocial} />
+        <DataField label="Código RNOS" value={datos?.rnos} />
+        <DataField label="N° de afiliado / beneficiario" value={datos?.nroAfiliado} />
+        <DataField label="Estado de cobertura" value={datos?.estado ?? datos?.vigencia} />
       </div>
 
       {/* Footer */}
       <div className="mt-4 flex items-center justify-between gap-3">
         <p className="text-xs text-text-secondary/50">
-          {resultado.fuente === 'sss-web'
-            ? 'Dato en tiempo real · Superintendencia de Servicios de Salud'
-            : resultado.fuente === 'api-sisa'
-            ? 'Dato en tiempo real · PUCO/SISA MSAL'
-            : 'Dato en caché (24hs)'}
+          {esCache ? 'Dato en caché (24hs)' : `Dato en tiempo real · ${FUENTE_LABEL[fuente]}`}
         </p>
-
-        {/* Botón guardar — solo para resultados SSS en tiempo real, no cache */}
-        {esSssFuente && (
+        {esTiempoReal && (
           <button
             onClick={guardarEnDB}
             disabled={guardando || guardado}
@@ -454,11 +455,7 @@ function ResultadoCard({
                 : 'text-accent-primary border border-accent-primary/30 hover:bg-accent-primary/10 disabled:opacity-50'
             }`}
           >
-            {guardando ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Save size={13} />
-            )}
+            {guardando ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             {guardado ? 'Guardado en DB' : 'Guardar en DB'}
           </button>
         )}
@@ -467,13 +464,7 @@ function ResultadoCard({
   )
 }
 
-function DataField({
-  label,
-  value,
-}: {
-  label: string
-  value?: string | null
-}) {
+function DataField({ label, value }: { label: string; value?: string | null }) {
   return (
     <div>
       <p className="metric-label mb-1">{label}</p>
