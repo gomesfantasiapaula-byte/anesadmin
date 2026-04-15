@@ -182,17 +182,48 @@ export const documents = pgTable(
   }),
 )
 
+// ── Protocolos Anestésicos ────────────────────────────────────────────────────
+export const anestheticProtocols = pgTable(
+  'anesthetic_protocols',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    hospitalId: uuid('hospital_id').references(() => hospitals.id, {
+      onDelete: 'set null',
+    }),
+    patientFirstName: varchar('patient_first_name', { length: 255 }).notNull(),
+    patientLastName: varchar('patient_last_name', { length: 255 }).notNull(),
+    protocolDate: date('protocol_date').notNull(),
+    imageUrl: text('image_url').notNull(),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdx: index('anesthetic_protocols_user_idx').on(table.userId),
+    userDateIdx: index('anesthetic_protocols_user_date_idx').on(
+      table.userId,
+      table.protocolDate,
+    ),
+    hospitalIdx: index('anesthetic_protocols_hospital_idx').on(table.hospitalId),
+  }),
+)
+
 // ── Relaciones ────────────────────────────────────────────────────────────────
 export const usersRelations = relations(users, ({ many }) => ({
   hospitals: many(hospitals),
   workSessions: many(workSessions),
   documents: many(documents),
+  anestheticProtocols: many(anestheticProtocols),
 }))
 
 export const hospitalsRelations = relations(hospitals, ({ one, many }) => ({
   user: one(users, { fields: [hospitals.userId], references: [users.id] }),
   workSessions: many(workSessions),
   documents: many(documents),
+  anestheticProtocols: many(anestheticProtocols),
 }))
 
 export const workSessionsRelations = relations(workSessions, ({ one }) => ({
@@ -211,6 +242,20 @@ export const documentsRelations = relations(documents, ({ one }) => ({
   }),
 }))
 
+export const anestheticProtocolsRelations = relations(
+  anestheticProtocols,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [anestheticProtocols.userId],
+      references: [users.id],
+    }),
+    hospital: one(hospitals, {
+      fields: [anestheticProtocols.hospitalId],
+      references: [hospitals.id],
+    }),
+  }),
+)
+
 // ── Tipos exportados ──────────────────────────────────────────────────────────
 export type User = typeof users.$inferSelect
 export type Hospital = typeof hospitals.$inferSelect
@@ -220,3 +265,5 @@ export type NewWorkSession = typeof workSessions.$inferInsert
 export type Document = typeof documents.$inferSelect
 export type NewDocument = typeof documents.$inferInsert
 export type PatientCache = typeof patientsCache.$inferSelect
+export type AnestheticProtocol = typeof anestheticProtocols.$inferSelect
+export type NewAnestheticProtocol = typeof anestheticProtocols.$inferInsert

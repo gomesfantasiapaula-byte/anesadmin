@@ -10,6 +10,7 @@ import {
   Users,
   FileText,
   Building2,
+  ClipboardList,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -33,6 +34,11 @@ const navItems = [
     href: '/dashboard/documentos',
     icon: FileText,
     label: 'Documentos OCR',
+  },
+  {
+    href: '/dashboard/protocolos',
+    icon: ClipboardList,
+    label: 'Protocolos',
   },
   {
     href: '/dashboard/hospitales',
