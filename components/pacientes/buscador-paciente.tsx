@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Search, User, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react'
+import { Search, User, ShieldCheck, AlertCircle, Loader2, ExternalLink } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -11,6 +11,8 @@ import type { SisaCobertura } from '@/lib/sisa-api'
 interface ResultadoPaciente {
   data: SisaCobertura
   fuente: 'cache' | 'cache-db' | 'api-sisa'
+  /** URL de consulta manual en SSS — presente cuando no hay credenciales SISA */
+  urlSSS?: string
 }
 
 export function BuscadorPaciente() {
@@ -113,15 +115,60 @@ export function BuscadorPaciente() {
       )}
 
       {resultado && !cargando && (
-        <ResultadoCard resultado={resultado} />
+        <ResultadoCard resultado={resultado} dniActual={dni} />
       )}
     </div>
   )
 }
 
-function ResultadoCard({ resultado }: { resultado: ResultadoPaciente }) {
-  const { data, fuente } = resultado
-  const tieneError = !!data.errorCodigo
+function ResultadoCard({
+  resultado,
+  dniActual,
+}: {
+  resultado: ResultadoPaciente
+  dniActual: string
+}) {
+  const { data, fuente, urlSSS } = resultado
+
+  // ── Sin credenciales SISA configuradas ───────────────────────────────────────
+  if (data.sinCredenciales) {
+    return (
+      <div className="card border-warning/20 bg-warning/5 space-y-4">
+        <div className="flex items-start gap-3">
+          <AlertCircle size={20} className="text-warning flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-warning">
+              Consulta PUCO no configurada
+            </p>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
+              Las credenciales de acceso al PUCO (Padrón Único Consolidado
+              Operativo del Ministerio de Salud) no están configuradas.
+              Podés consultar la cobertura manualmente en la SSS:
+            </p>
+          </div>
+        </div>
+
+        <a
+          href={urlSSS ?? 'https://www.sssalud.gob.ar/index.php?user=GRAL&page=bus650'}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 w-full justify-center rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-accent-primary text-sm font-medium px-4 py-3 hover:bg-accent-primary/20 transition-colors"
+        >
+          <ExternalLink size={15} />
+          Consultar cobertura en SSS · DNI {dniActual}
+        </a>
+
+        <p className="text-xs text-text-secondary/60 text-center">
+          En la SSS ingresá el DNI manualmente y resolvé el captcha.
+        </p>
+      </div>
+    )
+  }
+
+  // ── Error de PUCO (paciente no encontrado, error auth, etc.) ─────────────────
+  const tieneError =
+    !!data.errorCodigo ||
+    (data.resultado && data.resultado !== 'OK' && data.resultado !== 'MULTIPLE_RESULTADO')
 
   if (tieneError) {
     return (
@@ -130,10 +177,12 @@ function ResultadoCard({ resultado }: { resultado: ResultadoPaciente }) {
           <AlertCircle size={20} className="text-danger flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-semibold text-danger">
-              Paciente no encontrado
+              {data.resultado === 'NO_ENCONTRADO'
+                ? 'Paciente no encontrado en PUCO'
+                : 'Error al consultar PUCO'}
             </p>
             <p className="text-xs text-text-secondary mt-1">
-              {data.errorDescripcion ?? 'Sin cobertura registrada en SISA'}
+              {data.errorDescripcion ?? data.resultado ?? 'Sin cobertura registrada'}
             </p>
           </div>
         </div>
@@ -141,15 +190,13 @@ function ResultadoCard({ resultado }: { resultado: ResultadoPaciente }) {
     )
   }
 
-  const nombreCompleto = [data.apellido, data.nombre]
-    .filter(Boolean)
-    .join(', ')
+  // ── Resultado OK ─────────────────────────────────────────────────────────────
+  const nombreCompleto = [data.apellido, data.nombre].filter(Boolean).join(', ')
 
   return (
     <div className="card border-accent-primary/20 animate-fade-in">
       {/* Header del paciente */}
       <div className="flex items-start gap-4 mb-6">
-        {/* Avatar placeholder */}
         <div className="w-14 h-14 rounded-2xl bg-accent-primary/10 border border-accent-primary/20 flex items-center justify-center flex-shrink-0">
           <User size={24} className="text-accent-primary" />
         </div>
@@ -183,9 +230,9 @@ function ResultadoCard({ resultado }: { resultado: ResultadoPaciente }) {
         <DataField label="Estado de cobertura" value={data.estado} />
       </div>
 
-      {/* Metadatos del cache */}
+      {/* Metadatos */}
       <p className="mt-4 text-right text-xs text-text-secondary/50">
-        {fuente === 'api-sisa' ? 'Dato en tiempo real · SISA MSAL' : 'Dato en caché (24hs)'}
+        {fuente === 'api-sisa' ? 'Dato en tiempo real · PUCO/SISA MSAL' : 'Dato en caché (24hs)'}
       </p>
     </div>
   )

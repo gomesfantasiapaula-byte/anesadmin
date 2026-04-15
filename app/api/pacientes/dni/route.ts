@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { kv } from '@vercel/kv'
 import { db } from '@/lib/db'
 import { patientsCache } from '@/lib/db/schema'
-import { consultarCoberturaSisa, normalizarDni, validarDni, type SisaSexo } from '@/lib/sisa-api'
+import { consultarCoberturaSisa, normalizarDni, validarDni, urlConsultaSSS, type SisaSexo } from '@/lib/sisa-api'
 import { eq, and } from 'drizzle-orm'
 
 // TTL del cache: 24 horas en segundos
@@ -97,7 +97,12 @@ export async function GET(request: NextRequest) {
         },
       })
 
-    return NextResponse.json({ data: sisaData, fuente: 'api-sisa' })
+    return NextResponse.json({
+      data: sisaData,
+      fuente: 'api-sisa',
+      // Si no hay credenciales, incluir URL de consulta manual en SSS
+      ...(sisaData.sinCredenciales && { urlSSS: urlConsultaSSS(dni) }),
+    })
   } catch (error) {
     console.error('[API Pacientes] Error consultando SISA:', error)
     return NextResponse.json(
