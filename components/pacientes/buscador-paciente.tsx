@@ -76,7 +76,7 @@ export function BuscadorPaciente() {
       )
       const cacheJson = await cacheRes.json()
 
-      if (cacheRes.ok && cacheJson.data && !cacheJson.data.sinCredenciales) {
+      if (cacheRes.ok && cacheJson.data && !cacheJson.data.sinCredenciales && !cacheJson.data.sinDatos) {
         // ¡Dato en cache! Mostrarlo directo sin CAPTCHA
         setResultado({
           data: cacheJson.data,
