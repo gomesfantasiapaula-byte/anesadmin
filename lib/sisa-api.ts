@@ -99,19 +99,15 @@ export async function consultarCoberturaSisa(
     throw new Error(`PUCO no devolvió JSON válido: ${text.slice(0, 300)}`)
   }
 
-  // Normalizar: el campo DNI y sexo siempre presentes
-  return { dni, sexo, ...data }
+  // data puede traer sus propios dni/sexo; los del parámetro tienen prioridad
+  return { ...data, dni, sexo }
 }
 
 /**
  * Genera la URL de consulta manual en la SSS (sssalud.gob.ar).
  * Se usa como fallback cuando no hay credenciales SISA configuradas.
- * El usuario abre el link, ingresa el CAPTCHA y ve la cobertura.
  */
-export function urlConsultaSSS(dni: string): string {
-  // La SSS acepta el DNI en el campo nro_doc del formulario bus650.
-  // No es posible pre-rellenar por GET (el form usa POST), así que
-  // abrimos directamente la página de consulta.
+export function urlConsultaSSS(_dni: string): string {
   return `https://www.sssalud.gob.ar/index.php?user=GRAL&page=bus650`
 }
 
@@ -127,19 +123,4 @@ export function normalizarDni(dni: string): string {
  */
 export function validarDni(dni: string): boolean {
   return /^\d{7,8}$/.test(normalizarDni(dni))
-}
-
-/**
- * Normaliza el DNI eliminando puntos y espacios.
- */
-export function normalizarDni(dni: string): string {
-  return dni.replace(/[\.\s-]/g, '').trim()
-}
-
-/**
- * Valida que el DNI tenga un formato válido (7-8 dígitos).
- */
-export function validarDni(dni: string): boolean {
-  const normalizado = normalizarDni(dni)
-  return /^\d{7,8}$/.test(normalizado)
 }

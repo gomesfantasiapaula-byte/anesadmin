@@ -40,10 +40,17 @@ export async function GET() {
     const html = await pageRes.text()
 
     // Extraer PHPSESSID de la cabecera Set-Cookie
-    const rawCookies = pageRes.headers.getSetCookie?.() ?? []
+    // Usamos get('set-cookie') que es compatible con todas las versiones del runtime
     const allCookieHeader = pageRes.headers.get('set-cookie') ?? ''
+    // getSetCookie() devuelve array separado por cookie (Node 18.14+); fallback a string
+    const getSetCookie = (pageRes.headers as any).getSetCookie
+    const rawCookies: string[] = typeof getSetCookie === 'function'
+      ? getSetCookie.call(pageRes.headers)
+      : allCookieHeader ? [allCookieHeader] : []
+
     const phpSessMatch =
       rawCookies
+        .flatMap((c) => c.split(',').map((s) => s.trim()))
         .map((c) => c.match(/PHPSESSID=([^;]+)/i))
         .find(Boolean) ??
       allCookieHeader.match(/PHPSESSID=([^;]+)/i)

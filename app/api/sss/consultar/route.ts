@@ -3,14 +3,11 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { patientsCache } from '@/lib/db/schema'
-import { eq, and } from 'drizzle-orm'
 import type { SisaCobertura, SisaSexo } from '@/lib/sisa-api'
 
 const SSS_BASE = 'https://www.sssalud.gob.ar'
 const SSS_SUBMIT = `${SSS_BASE}/index.php?page=bus650&user=GRAL&cat=consultas`
 const SSS_PAGE = `${SSS_BASE}/index.php?user=GRAL&page=bus650`
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000
-
 export interface SssConsultaBody {
   dni: string
   sexo: SisaSexo
