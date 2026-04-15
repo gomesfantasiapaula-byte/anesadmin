@@ -106,6 +106,37 @@ export const workSessions = pgTable(
   }),
 )
 
+// ── Pacientes (perfil persistente) ───────────────────────────────────────────
+export const patients = pgTable(
+  'patients',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    dni: varchar('dni', { length: 20 }).notNull().unique(),
+    sexo: varchar('sexo', { length: 1 }).notNull(),
+    nombre: text('nombre'),
+    apellido: text('apellido'),
+    fechaNacimiento: varchar('fecha_nacimiento', { length: 10 }), // DD/MM/YYYY
+    // Cobertura detectada automáticamente (última búsqueda exitosa)
+    coberturaAutoNombre: text('cobertura_auto_nombre'),
+    coberturaAutoFuente: varchar('cobertura_auto_fuente', { length: 50 }),
+    coberturaAutoFecha: timestamp('cobertura_auto_fecha', { mode: 'date' }),
+    // Cobertura cargada manualmente
+    coberturaTipo: varchar('cobertura_tipo', { length: 30 }),  // 'obra-social'|'prepaga'|'particular'|'sin-cobertura'
+    coberturaNombre: text('cobertura_nombre'),
+    coberturaCredencial: varchar('cobertura_credencial', { length: 100 }),
+    coberturaPlan: varchar('cobertura_plan', { length: 100 }),
+    coberturaNotas: text('cobertura_notas'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => ({
+    dniIdx: uniqueIndex('patients_dni_idx').on(table.dni),
+  }),
+)
+
+export type Patient = typeof patients.$inferSelect
+export type NewPatient = typeof patients.$inferInsert
+
 // ── Cache de pacientes (API SISA MSAL) ────────────────────────────────────────
 export const patientsCache = pgTable(
   'patients_cache',
